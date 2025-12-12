@@ -4,8 +4,13 @@ import logging
 import yaml
 from datetime import datetime
 
+# Load Config
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
+
+# Load Rules
+with open("rules.json", "r") as f:
+    rules = json.load(f)
 
 logging.basicConfig(filename=config["log_file"], level=logging.INFO, format='%(message)s')
 
@@ -23,22 +28,24 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low"):
     logging.info(json.dumps(alert_data))
     
     if config["alerts"]["enable_console_output"]:
-        print(f"[LOGGED] {alert_type}: {src_ip}:{src_port} -> {dst_ip}:{dst_port}")
+        print(f"[ALERT] {alert_type}: {src_ip} -> {dst_ip} ({severity})")
 
 def packet_callback(packet):
     if packet.haslayer(scapy.IP):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
+        # Check Source IP against Blacklist
+        if src_ip in rules["blacklist_ips"]:
+            src_port = packet.sport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
+            dst_port = packet.dport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
+            log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, src_port, dst_port, severity="High")
+
         if packet.haslayer(scapy.TCP):
-            src_port = packet[scapy.TCP].sport
-            dst_port = packet[scapy.TCP].dport
-            log_alert("TCP_TRAFFIC", src_ip, dst_ip, src_port, dst_port)
+            pass
 
         elif packet.haslayer(scapy.UDP):
-            src_port = packet[scapy.UDP].sport
-            dst_port = packet[scapy.UDP].dport
-            log_alert("UDP_TRAFFIC", src_ip, dst_ip, src_port, dst_port)
+            pass
 
 def main():
     if isinstance(config["interface"], int):
@@ -46,7 +53,7 @@ def main():
     else:
         interface = config["interface"]
 
-    print(f"\n[+] Loading configuration from config.yaml...")
+    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs in blacklist.")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:
