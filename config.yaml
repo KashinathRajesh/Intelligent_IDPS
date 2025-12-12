@@ -1,0 +1,5 @@
+interface: 23
+log_file: alerts.log
+log_level: INFO
+alerts:
+  enable_console_output: true
