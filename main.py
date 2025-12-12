@@ -1,16 +1,40 @@
 import scapy.all as scapy
 
 def packet_callback(packet):
-    print(packet.summary())
+    # Check if the packet has an IP layer (IPv4)
+    if packet.haslayer(scapy.IP):
+        src_ip = packet[scapy.IP].src
+        dst_ip = packet[scapy.IP].dst
+        protocol = packet[scapy.IP].proto
+
+        # Check if it is a TCP packet
+        if packet.haslayer(scapy.TCP):
+            try:
+                src_port = packet[scapy.TCP].sport
+                dst_port = packet[scapy.TCP].dport
+                print(f"[TCP] {src_ip}:{src_port} -> {dst_ip}:{dst_port}")
+            except AttributeError:
+                pass # Skip malformed packets
+
+        # Check if it is a UDP packet
+        elif packet.haslayer(scapy.UDP):
+            try:
+                src_port = packet[scapy.UDP].sport
+                dst_port = packet[scapy.UDP].dport
+                print(f"[UDP] {src_ip}:{src_port} -> {dst_ip}:{dst_port}")
+            except AttributeError:
+                pass
+        
+        # Other IP packets (ICMP, etc.)
+        else:
+             print(f"[IP]  {src_ip} -> {dst_ip} | Protocol: {protocol}")
 
 def main():
     print("Available Interfaces:")
     scapy.show_interfaces()
     
-    # Get user input
     choice = input("\nEnter the 'Index' (e.g. 23) of the interface to sniff: ")
     
-    # Logic to handle Index (number) vs Name (string)
     if choice.isdigit():
         interface = scapy.dev_from_index(int(choice))
     else:
