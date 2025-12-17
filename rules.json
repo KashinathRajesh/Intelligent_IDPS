@@ -4,5 +4,12 @@
         "8.8.8.8",
         "192.168.1.50"
     ],
-    "signatures": []
+    "payload_signatures": [
+        "UNION SELECT",
+        "OR 1=1",
+        "/etc/passwd",
+        "<script>",
+        "cmd.exe",
+        "eval("
+    ]
 }

@@ -4,6 +4,7 @@ import logging
 import yaml
 import time
 from datetime import datetime
+from urllib.parse import unquote
 
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
@@ -15,7 +16,7 @@ logging.basicConfig(filename=config["log_file"], level=logging.INFO, format='%(m
 
 scan_tracker = {}
 
-def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low"):
+def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", payload=""):
     alert_data = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": alert_type,
@@ -23,7 +24,8 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low"):
         "src_ip": src_ip,
         "dst_ip": dst_ip,
         "src_port": src_port,
-        "dst_port": dst_port
+        "dst_port": dst_port,
+        "payload_snippet": payload
     }
     
     logging.info(json.dumps(alert_data))
@@ -54,6 +56,25 @@ def detect_port_scan(src_ip, dst_port):
         log_alert("PORT_SCAN_DETECTED", src_ip, "Multiple", 0, 0, severity="Medium")
         tracker["alerted"] = True
 
+def check_payload(packet, src_ip, dst_ip, src_port, dst_port):
+    if packet.haslayer(scapy.Raw):
+        try:
+            # 1. Decode bytes to string
+            raw_payload = packet[scapy.Raw].load.decode('utf-8', errors='ignore')
+            
+            # 2. Decode URL encoding (turns %20 back into space)
+            decoded_payload = unquote(raw_payload)
+
+            for signature in rules["payload_signatures"]:
+                # Check BOTH the raw and the decoded version
+                if signature in raw_payload or signature in decoded_payload:
+                    log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", 
+                              src_ip, dst_ip, src_port, dst_port, 
+                              severity="Critical", payload=decoded_payload[:100])
+                    return
+        except Exception:
+            pass
+
 def packet_callback(packet):
     if packet.haslayer(scapy.IP):
         src_ip = packet[scapy.IP].src
@@ -65,10 +86,13 @@ def packet_callback(packet):
             log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, src_port, dst_port, severity="High")
 
         if packet.haslayer(scapy.TCP):
+            src_port = packet[scapy.TCP].sport
             dst_port = packet[scapy.TCP].dport
             detect_port_scan(src_ip, dst_port)
+            check_payload(packet, src_ip, dst_ip, src_port, dst_port)
 
         elif packet.haslayer(scapy.UDP):
+            src_port = packet[scapy.UDP].sport
             dst_port = packet[scapy.UDP].dport
             detect_port_scan(src_ip, dst_port)
 
@@ -78,7 +102,7 @@ def main():
     else:
         interface = config["interface"]
 
-    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs in blacklist.")
+    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['payload_signatures'])} Signatures.")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:
