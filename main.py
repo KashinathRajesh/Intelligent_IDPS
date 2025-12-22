@@ -3,6 +3,7 @@ import json
 import logging
 import yaml
 import time
+import geoip2.database
 from datetime import datetime
 from urllib.parse import unquote
 
@@ -14,14 +15,35 @@ with open("rules.json", "r") as f:
 
 logging.basicConfig(filename=config["log_file"], level=logging.INFO, format='%(message)s')
 
+# Load GeoIP Database
+try:
+    geoip_reader = geoip2.database.Reader('GeoLite2-City.mmdb')
+    print("[+] GeoIP Database loaded successfully.")
+except FileNotFoundError:
+    print("[!] Error: GeoLite2-City.mmdb not found. GeoIP features disabled.")
+    geoip_reader = None
+
 scan_tracker = {}
 
+def get_country(ip):
+    if geoip_reader is None:
+        return "Unknown"
+    try:
+        response = geoip_reader.city(ip)
+        return response.country.name if response.country.name else "Unknown"
+    except Exception:
+        return "Internal/Private"
+
 def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", payload=""):
+    # Resolve Country
+    src_country = get_country(src_ip)
+    
     alert_data = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": alert_type,
         "severity": severity,
         "src_ip": src_ip,
+        "src_country": src_country,
         "dst_ip": dst_ip,
         "src_port": src_port,
         "dst_port": dst_port,
@@ -31,7 +53,8 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", pa
     logging.info(json.dumps(alert_data))
     
     if config["alerts"]["enable_console_output"]:
-        print(f"[ALERT] {alert_type}: {src_ip} -> {dst_ip} ({severity})")
+        # Corrected print statement to show country in console
+        print(f"[ALERT] {alert_type}: {src_ip} ({src_country}) -> {dst_ip} ({severity})")
 
 def detect_port_scan(src_ip, dst_port):
     current_time = time.time()
@@ -76,11 +99,11 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
-        # --- NEW: Whitelist Check ---
+        # Whitelist Check
         if src_ip in config.get("whitelist", []):
-            return  # Ignore this packet completely
-        # ----------------------------
+            return
 
+        # Blacklist Check
         if src_ip in rules["blacklist_ips"]:
             src_port = packet.sport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
             dst_port = packet.dport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
@@ -104,7 +127,7 @@ def main():
         interface = config["interface"]
 
     print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['payload_signatures'])} Signatures.")
-    print(f"\n[+] Whitelist loaded: {config.get('whitelist', [])}")
+    print(f"[+] Whitelist loaded: {config.get('whitelist', [])}")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:
