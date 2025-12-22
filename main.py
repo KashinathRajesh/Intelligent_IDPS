@@ -59,14 +59,10 @@ def detect_port_scan(src_ip, dst_port):
 def check_payload(packet, src_ip, dst_ip, src_port, dst_port):
     if packet.haslayer(scapy.Raw):
         try:
-            # 1. Decode bytes to string
             raw_payload = packet[scapy.Raw].load.decode('utf-8', errors='ignore')
-            
-            # 2. Decode URL encoding (turns %20 back into space)
             decoded_payload = unquote(raw_payload)
 
             for signature in rules["payload_signatures"]:
-                # Check BOTH the raw and the decoded version
                 if signature in raw_payload or signature in decoded_payload:
                     log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", 
                               src_ip, dst_ip, src_port, dst_port, 
@@ -80,6 +76,11 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
+        # --- NEW: Whitelist Check ---
+        if src_ip in config.get("whitelist", []):
+            return  # Ignore this packet completely
+        # ----------------------------
+
         if src_ip in rules["blacklist_ips"]:
             src_port = packet.sport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
             dst_port = packet.dport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
@@ -103,6 +104,7 @@ def main():
         interface = config["interface"]
 
     print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['payload_signatures'])} Signatures.")
+    print(f"\n[+] Whitelist loaded: {config.get('whitelist', [])}")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:

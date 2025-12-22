@@ -1,5 +1,9 @@
-interface: 23
+interface: 23   
 log_file: alerts.log
 log_level: INFO
 alerts:
   enable_console_output: true
+whitelist:
+  - "192.168.18.199"  
+  - "127.0.0.1"
+  - "192.168.18.1"
