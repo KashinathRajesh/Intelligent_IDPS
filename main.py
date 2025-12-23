@@ -1,4 +1,5 @@
 import scapy.all as scapy
+from scapy.layers.http import HTTPRequest
 import json
 import logging
 import yaml
@@ -15,7 +16,6 @@ with open("rules.json", "r") as f:
 
 logging.basicConfig(filename=config["log_file"], level=logging.INFO, format='%(message)s')
 
-# Load GeoIP Database
 try:
     geoip_reader = geoip2.database.Reader('GeoLite2-City.mmdb')
     print("[+] GeoIP Database loaded successfully.")
@@ -35,7 +35,6 @@ def get_country(ip):
         return "Internal/Private"
 
 def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", payload=""):
-    # Resolve Country
     src_country = get_country(src_ip)
     
     alert_data = {
@@ -53,8 +52,24 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", pa
     logging.info(json.dumps(alert_data))
     
     if config["alerts"]["enable_console_output"]:
-        # Corrected print statement to show country in console
         print(f"[ALERT] {alert_type}: {src_ip} ({src_country}) -> {dst_ip} ({severity})")
+
+def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
+    try:
+        if packet.haslayer(HTTPRequest):
+            host = packet[HTTPRequest].Host.decode('utf-8', errors='ignore')
+            path = packet[HTTPRequest].Path.decode('utf-8', errors='ignore')
+            method = packet[HTTPRequest].Method.decode('utf-8', errors='ignore')
+            
+            url = f"http://{host}{path}"
+            
+            print(f"[HTTP] {method} request to {url}")
+            
+            if "/admin" in path or "/login" in path:
+                log_alert("SENSITIVE_PATH_ACCESS", src_ip, dst_ip, src_port, dst_port, severity="Medium", payload=url)
+
+    except Exception as e:
+        pass
 
 def detect_port_scan(src_ip, dst_port):
     current_time = time.time()
@@ -99,11 +114,11 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
-        # Whitelist Check
-        if src_ip in config.get("whitelist", []):
-            return
+        # NOTE: Whitelist logic is temporarily commented out for testing.
+        # Uncomment this block when you want to ignore your own traffic again.
+        # if src_ip in config.get("whitelist", []):
+        #    return
 
-        # Blacklist Check
         if src_ip in rules["blacklist_ips"]:
             src_port = packet.sport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
             dst_port = packet.dport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
@@ -114,6 +129,7 @@ def packet_callback(packet):
             dst_port = packet[scapy.TCP].dport
             detect_port_scan(src_ip, dst_port)
             check_payload(packet, src_ip, dst_ip, src_port, dst_port)
+            process_http_packet(packet, src_ip, dst_ip, src_port, dst_port)
 
         elif packet.haslayer(scapy.UDP):
             src_port = packet[scapy.UDP].sport
