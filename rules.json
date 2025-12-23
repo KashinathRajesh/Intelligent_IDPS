@@ -17,5 +17,12 @@
         "<script>",
         "cmd.exe",
         "eval("
+    ],
+    "suspicious_user_agents": [
+        "sqlmap",
+        "nikto",
+        "nmap",
+        "w3af",
+        "n-stealth"
     ]
 }

@@ -12,7 +12,7 @@ A Python-based IDPS that detects network anomalies using signature-based rules a
 
 ## Status
 - [x] Environment Setup
-- [ ] Packet Sniffer
-- [ ] Rule Engine
+- [x] Packet Sniffer
+- [x] Rule Engine
 - [ ] ML Integration
 - [ ] Dashboard

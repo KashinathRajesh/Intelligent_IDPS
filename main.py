@@ -37,7 +37,6 @@ def get_country(ip):
 
 def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", payload=""):
     src_country = get_country(src_ip)
-    
     alert_data = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": alert_type,
@@ -49,26 +48,9 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", pa
         "dst_port": dst_port,
         "payload_snippet": payload
     }
-    
     logging.info(json.dumps(alert_data))
-    
     if config["alerts"]["enable_console_output"]:
         print(f"[ALERT] {alert_type}: {src_ip} ({src_country}) -> {dst_ip} ({severity})")
-
-def process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port):
-    if packet.haslayer(DNSQR):
-        try:
-            # Extract the queried domain name (bytes -> string)
-            # decode('utf-8') keeps the trailing dot (e.g., "google.com.")
-            query_name = packet[DNSQR].qname.decode('utf-8').rstrip('.')
-            
-            # Check against Blacklist
-            if query_name in rules["blacklist_domains"]:
-                log_alert(f"MALICIOUS_DNS_QUERY: {query_name}", 
-                          src_ip, dst_ip, src_port, dst_port, 
-                          severity="Critical", payload=query_name)
-        except Exception:
-            pass
 
 def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
     try:
@@ -76,12 +58,27 @@ def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
             host = packet[HTTPRequest].Host.decode('utf-8', errors='ignore')
             path = packet[HTTPRequest].Path.decode('utf-8', errors='ignore')
             method = packet[HTTPRequest].Method.decode('utf-8', errors='ignore')
-            url = f"http://{host}{path}"
             
+            # --- NEW: User-Agent Check ---
+            user_agent = packet[HTTPRequest].User_Agent.decode('utf-8', errors='ignore').lower()
+            for agent in rules.get("suspicious_user_agents", []):
+                if agent in user_agent:
+                    log_alert(f"SUSPICIOUS_USER_AGENT: {agent}", src_ip, dst_ip, src_port, dst_port, severity="High", payload=user_agent)
+            
+            url = f"http://{host}{path}"
             if "/admin" in path or "/login" in path:
                 log_alert("SENSITIVE_PATH_ACCESS", src_ip, dst_ip, src_port, dst_port, severity="Medium", payload=url)
     except Exception:
         pass
+
+def process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port):
+    if packet.haslayer(DNSQR):
+        try:
+            query_name = packet[DNSQR].qname.decode('utf-8').rstrip('.')
+            if query_name in rules["blacklist_domains"]:
+                log_alert(f"MALICIOUS_DNS_QUERY: {query_name}", src_ip, dst_ip, src_port, dst_port, severity="Critical", payload=query_name)
+        except Exception:
+            pass
 
 def detect_port_scan(src_ip, dst_port):
     current_time = time.time()
@@ -104,9 +101,7 @@ def check_payload(packet, src_ip, dst_ip, src_port, dst_port):
             decoded_payload = unquote(raw_payload)
             for signature in rules["payload_signatures"]:
                 if signature in raw_payload or signature in decoded_payload:
-                    log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", 
-                              src_ip, dst_ip, src_port, dst_port, 
-                              severity="Critical", payload=decoded_payload[:100])
+                    log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", src_ip, dst_ip, src_port, dst_port, severity="Critical", payload=decoded_payload[:100])
                     return
         except Exception:
             pass
@@ -116,14 +111,9 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
-        # NOTE: Uncomment to enable whitelist
-        # if src_ip in config.get("whitelist", []):
-        #    return
-
         if src_ip in rules["blacklist_ips"]:
             log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, 0, 0, severity="High")
 
-        # TCP Analysis (HTTP, Port Scan, Payload)
         if packet.haslayer(scapy.TCP):
             src_port = packet[scapy.TCP].sport
             dst_port = packet[scapy.TCP].dport
@@ -131,13 +121,10 @@ def packet_callback(packet):
             check_payload(packet, src_ip, dst_ip, src_port, dst_port)
             process_http_packet(packet, src_ip, dst_ip, src_port, dst_port)
 
-        # UDP Analysis (DNS, Port Scan)
         elif packet.haslayer(scapy.UDP):
             src_port = packet[scapy.UDP].sport
             dst_port = packet[scapy.UDP].dport
             detect_port_scan(src_ip, dst_port)
-            
-            # Process DNS (Port 53)
             if dst_port == 53:
                 process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port)
 
