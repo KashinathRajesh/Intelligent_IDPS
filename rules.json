@@ -4,6 +4,12 @@
         "8.8.8.8",
         "192.168.1.50"
     ],
+    "blacklist_domains": [
+        "malware.com",
+        "botnet-c2.org",
+        "ransomware-site.net",
+        "test.com"
+    ],
     "payload_signatures": [
         "UNION SELECT",
         "OR 1=1",

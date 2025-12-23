@@ -1,5 +1,6 @@
 import scapy.all as scapy
 from scapy.layers.http import HTTPRequest
+from scapy.layers.dns import DNSQR
 import json
 import logging
 import yaml
@@ -54,42 +55,44 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", pa
     if config["alerts"]["enable_console_output"]:
         print(f"[ALERT] {alert_type}: {src_ip} ({src_country}) -> {dst_ip} ({severity})")
 
+def process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port):
+    if packet.haslayer(DNSQR):
+        try:
+            # Extract the queried domain name (bytes -> string)
+            # decode('utf-8') keeps the trailing dot (e.g., "google.com.")
+            query_name = packet[DNSQR].qname.decode('utf-8').rstrip('.')
+            
+            # Check against Blacklist
+            if query_name in rules["blacklist_domains"]:
+                log_alert(f"MALICIOUS_DNS_QUERY: {query_name}", 
+                          src_ip, dst_ip, src_port, dst_port, 
+                          severity="Critical", payload=query_name)
+        except Exception:
+            pass
+
 def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
     try:
         if packet.haslayer(HTTPRequest):
             host = packet[HTTPRequest].Host.decode('utf-8', errors='ignore')
             path = packet[HTTPRequest].Path.decode('utf-8', errors='ignore')
             method = packet[HTTPRequest].Method.decode('utf-8', errors='ignore')
-            
             url = f"http://{host}{path}"
-            
-            print(f"[HTTP] {method} request to {url}")
             
             if "/admin" in path or "/login" in path:
                 log_alert("SENSITIVE_PATH_ACCESS", src_ip, dst_ip, src_port, dst_port, severity="Medium", payload=url)
-
-    except Exception as e:
+    except Exception:
         pass
 
 def detect_port_scan(src_ip, dst_port):
     current_time = time.time()
-    
     if src_ip not in scan_tracker:
-        scan_tracker[src_ip] = {
-            "ports": set(),
-            "start_time": current_time,
-            "alerted": False
-        }
-
+        scan_tracker[src_ip] = {"ports": set(), "start_time": current_time, "alerted": False}
     tracker = scan_tracker[src_ip]
-
     if current_time - tracker["start_time"] > 60:
         tracker["ports"] = set()
         tracker["start_time"] = current_time
         tracker["alerted"] = False
-    
     tracker["ports"].add(dst_port)
-
     if len(tracker["ports"]) > 15 and not tracker["alerted"]:
         log_alert("PORT_SCAN_DETECTED", src_ip, "Multiple", 0, 0, severity="Medium")
         tracker["alerted"] = True
@@ -99,7 +102,6 @@ def check_payload(packet, src_ip, dst_ip, src_port, dst_port):
         try:
             raw_payload = packet[scapy.Raw].load.decode('utf-8', errors='ignore')
             decoded_payload = unquote(raw_payload)
-
             for signature in rules["payload_signatures"]:
                 if signature in raw_payload or signature in decoded_payload:
                     log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", 
@@ -114,16 +116,14 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
-        # NOTE: Whitelist logic is temporarily commented out for testing.
-        # Uncomment this block when you want to ignore your own traffic again.
+        # NOTE: Uncomment to enable whitelist
         # if src_ip in config.get("whitelist", []):
         #    return
 
         if src_ip in rules["blacklist_ips"]:
-            src_port = packet.sport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
-            dst_port = packet.dport if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else 0
-            log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, src_port, dst_port, severity="High")
+            log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, 0, 0, severity="High")
 
+        # TCP Analysis (HTTP, Port Scan, Payload)
         if packet.haslayer(scapy.TCP):
             src_port = packet[scapy.TCP].sport
             dst_port = packet[scapy.TCP].dport
@@ -131,10 +131,15 @@ def packet_callback(packet):
             check_payload(packet, src_ip, dst_ip, src_port, dst_port)
             process_http_packet(packet, src_ip, dst_ip, src_port, dst_port)
 
+        # UDP Analysis (DNS, Port Scan)
         elif packet.haslayer(scapy.UDP):
             src_port = packet[scapy.UDP].sport
             dst_port = packet[scapy.UDP].dport
             detect_port_scan(src_ip, dst_port)
+            
+            # Process DNS (Port 53)
+            if dst_port == 53:
+                process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port)
 
 def main():
     if isinstance(config["interface"], int):
@@ -142,8 +147,7 @@ def main():
     else:
         interface = config["interface"]
 
-    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['payload_signatures'])} Signatures.")
-    print(f"[+] Whitelist loaded: {config.get('whitelist', [])}")
+    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['blacklist_domains'])} Domains.")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:
