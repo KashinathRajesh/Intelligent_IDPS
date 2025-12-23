@@ -3,3 +3,4 @@ __pycache__/
 *.log
 *.pcap
 .DS_Store
+config.yaml
