@@ -4,3 +4,4 @@ __pycache__/
 *.pcap
 .DS_Store
 config.yaml
+training_data.csv

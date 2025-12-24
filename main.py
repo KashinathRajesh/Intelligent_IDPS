@@ -37,6 +37,7 @@ def get_country(ip):
 
 def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", payload=""):
     src_country = get_country(src_ip)
+    
     alert_data = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": alert_type,
@@ -48,9 +49,20 @@ def log_alert(alert_type, src_ip, dst_ip, src_port, dst_port, severity="Low", pa
         "dst_port": dst_port,
         "payload_snippet": payload
     }
+    
     logging.info(json.dumps(alert_data))
+    
     if config["alerts"]["enable_console_output"]:
         print(f"[ALERT] {alert_type}: {src_ip} ({src_country}) -> {dst_ip} ({severity})")
+
+def process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port):
+    if packet.haslayer(DNSQR):
+        try:
+            query_name = packet[DNSQR].qname.decode('utf-8').rstrip('.')
+            if query_name in rules.get("blacklist_domains", []):
+                log_alert(f"MALICIOUS_DNS_QUERY: {query_name}", src_ip, dst_ip, src_port, dst_port, severity="Critical", payload=query_name)
+        except Exception:
+            pass
 
 def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
     try:
@@ -59,7 +71,6 @@ def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
             path = packet[HTTPRequest].Path.decode('utf-8', errors='ignore')
             method = packet[HTTPRequest].Method.decode('utf-8', errors='ignore')
             
-            # --- NEW: User-Agent Check ---
             user_agent = packet[HTTPRequest].User_Agent.decode('utf-8', errors='ignore').lower()
             for agent in rules.get("suspicious_user_agents", []):
                 if agent in user_agent:
@@ -71,25 +82,19 @@ def process_http_packet(packet, src_ip, dst_ip, src_port, dst_port):
     except Exception:
         pass
 
-def process_dns_packet(packet, src_ip, dst_ip, src_port, dst_port):
-    if packet.haslayer(DNSQR):
-        try:
-            query_name = packet[DNSQR].qname.decode('utf-8').rstrip('.')
-            if query_name in rules["blacklist_domains"]:
-                log_alert(f"MALICIOUS_DNS_QUERY: {query_name}", src_ip, dst_ip, src_port, dst_port, severity="Critical", payload=query_name)
-        except Exception:
-            pass
-
 def detect_port_scan(src_ip, dst_port):
     current_time = time.time()
     if src_ip not in scan_tracker:
         scan_tracker[src_ip] = {"ports": set(), "start_time": current_time, "alerted": False}
     tracker = scan_tracker[src_ip]
+    
     if current_time - tracker["start_time"] > 60:
         tracker["ports"] = set()
         tracker["start_time"] = current_time
         tracker["alerted"] = False
+    
     tracker["ports"].add(dst_port)
+    
     if len(tracker["ports"]) > 15 and not tracker["alerted"]:
         log_alert("PORT_SCAN_DETECTED", src_ip, "Multiple", 0, 0, severity="Medium")
         tracker["alerted"] = True
@@ -99,7 +104,7 @@ def check_payload(packet, src_ip, dst_ip, src_port, dst_port):
         try:
             raw_payload = packet[scapy.Raw].load.decode('utf-8', errors='ignore')
             decoded_payload = unquote(raw_payload)
-            for signature in rules["payload_signatures"]:
+            for signature in rules.get("payload_signatures", []):
                 if signature in raw_payload or signature in decoded_payload:
                     log_alert(f"MALICIOUS_PAYLOAD_MATCH: {signature}", src_ip, dst_ip, src_port, dst_port, severity="Critical", payload=decoded_payload[:100])
                     return
@@ -111,7 +116,10 @@ def packet_callback(packet):
         src_ip = packet[scapy.IP].src
         dst_ip = packet[scapy.IP].dst
         
-        if src_ip in rules["blacklist_ips"]:
+        if src_ip in config.get("whitelist", []):
+            return
+
+        if src_ip in rules.get("blacklist_ips", []):
             log_alert("BLACKLIST_IP_DETECTED", src_ip, dst_ip, 0, 0, severity="High")
 
         if packet.haslayer(scapy.TCP):
@@ -134,7 +142,7 @@ def main():
     else:
         interface = config["interface"]
 
-    print(f"\n[+] Rules loaded: {len(rules['blacklist_ips'])} IPs, {len(rules['blacklist_domains'])} Domains.")
+    print(f"\n[+] Rules loaded: {len(rules.get('blacklist_ips', []))} IPs, {len(rules.get('blacklist_domains', []))} Domains.")
     print(f"[+] Starting capture on: {interface}\n")
     
     try:
