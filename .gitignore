@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 config.yaml
 training_data.csv
+trigger_anomaly.py

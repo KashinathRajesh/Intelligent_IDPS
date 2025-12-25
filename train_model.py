@@ -14,7 +14,7 @@ def train_anomaly_detector():
     # and adjust contamination to be more sensitive
     model = IsolationForest(
         n_estimators=200,
-        contamination=0.03,
+        contamination=0.01,
         max_samples='auto',
         random_state=42
     )
