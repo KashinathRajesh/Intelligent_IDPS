@@ -14,17 +14,6 @@ A Python-based IDPS that monitors network traffic in real-time, utilizing a hybr
 
 - Web Dashboard (Flask): Live-updating frontend with Socket.IO, featuring alert filtering, threat mapping (GeoIP), and severity charts.
 
-## Status
-[x] Environment Setup: Npcap, Scikit-Learn, and Flask integration.
-
-[x] Packet Sniffer: Optimized for Windows Loopback and Promiscuous capturing.
-
-[x] Rule Engine: Hardened payload decoding (UTF-8/URL) for signature matching.
-
-[x] ML Integration: Isolation Forest model trained on live network baselines with variable sensitivity.
-
-[x] Dashboard: Multi-layered filtering (IP, Geo, Severity) and historical data loading from MySQL.
-
 ## Technical Challenges & Solutions
 - Challenge: Alert Fatigue & Noise Filtering
 
