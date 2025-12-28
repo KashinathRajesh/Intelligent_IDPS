@@ -15,9 +15,14 @@
         .dashboard-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-top: 20px; }
         .panel { background: var(--panel-bg); border: 1px solid #333; border-radius: 8px; padding: 20px; }
         .stat-value { color: var(--neon-green); font-weight: bold; font-size: 1.5rem; }
+        
+        /* Filter Styles */
+        .filter-bar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; background: #222; padding: 10px; border-radius: 5px; }
+        .filter-bar input, .filter-bar select { background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 3px; }
+        
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #222; }
-        th { color: var(--neon-green); background: #1a1a1a; }
+        th { color: var(--neon-green); background: #1a1a1a; position: sticky; top: 0; }
         .severity-Critical { color: #ff0000; font-weight: bold; }
         .severity-High { color: #ff4b2b; }
         .severity-Medium { color: #ffa500; }
@@ -41,19 +46,36 @@
             <div id="map"></div>
         </div>
 
-        <div class="panel" style="overflow-y: auto; max-height: 750px;">
+        <div class="panel">
             <h3>Live Alert Stream</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Time</th>
-                        <th>Type</th>
-                        <th>Source IP</th>
-                        <th>Severity</th>
-                    </tr>
-                </thead>
-                <tbody id="alert-body"></tbody>
-            </table>
+            
+            <div class="filter-bar">
+                <input type="text" id="filterIP" placeholder="Filter Source IP..." onkeyup="applyFilters()">
+                <input type="text" id="filterType" placeholder="Filter Alert Type..." onkeyup="applyFilters()">
+                <input type="text" id="filterGeo" placeholder="Filter Geolocation..." onkeyup="applyFilters()">
+                <select id="filterSeverity" onchange="applyFilters()">
+                    <option value="">All Severities</option>
+                    <option value="Critical">Critical</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                </select>
+            </div>
+
+            <div style="overflow-y: auto; max-height: 600px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Type</th>
+                            <th>Source IP</th>
+                            <th>Geo</th>
+                            <th>Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="alert-body"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -75,52 +97,80 @@
         };
 
         const map = L.map('map').setView([20, 0], 2);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
-        }).addTo(map);
-
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         const markers = {};
 
         const ctx = document.getElementById('alertChart').getContext('2d');
         const alertChart = new Chart(ctx, {
             type: 'doughnut',
-            data: {
-                labels: [],
-                datasets: [{
-                    data: [],
-                    backgroundColor: ['#00ff41', '#ffa500', '#ff4b2b', '#ff0000', '#00d4ff'],
-                    borderColor: '#161616'
-                }]
-            },
+            data: { labels: [], datasets: [{ data: [], backgroundColor: ['#00ff41', '#ffa500', '#ff4b2b', '#ff0000'], borderColor: '#161616' }] },
             options: { maintainAspectRatio: false, plugins: { legend: { labels: { color: '#e0e0e0' } } } }
         });
 
         socket.on('new_alert', (data) => {
+            // Safety check: ensure 'type' exists from formatted DB object
+            const alertType = data.type || "Unknown";
+            
             totalAlerts++;
             document.getElementById('total-alerts').innerText = totalAlerts;
 
             const tbody = document.getElementById('alert-body');
             const row = tbody.insertRow(0);
+            
+            // Map attributes using the corrected 'alertType'
+            row.setAttribute('data-ip', data.src_ip || "N/A");
+            row.setAttribute('data-type', alertType);
+            row.setAttribute('data-geo', data.src_country || "Unknown");
+            row.setAttribute('data-severity', data.severity || "Low");
+
             row.innerHTML = `
-                <td>${data.timestamp.split(' ')[1]}</td>
-                <td>${data.type}</td>
-                <td>${data.src_ip}</td>
-                <td class="severity-${data.severity}">${data.severity}</td>
+                <td>${data.timestamp ? data.timestamp.split(' ')[1] : '--:--:--'}</td>
+                <td>${alertType}</td>
+                <td>${data.src_ip || "N/A"}</td>
+                <td>${data.src_country || "Unknown"}</td>
+                <td class="severity-${data.severity || 'Low'}">${data.severity || 'Low'}</td>
             `;
 
-            alertTypeData[data.type] = (alertTypeData[data.type] || 0) + 1;
+            // Update Doughnut Chart with corrected Type
+            alertTypeData[alertType] = (alertTypeData[alertType] || 0) + 1;
             alertChart.data.labels = Object.keys(alertTypeData);
             alertChart.data.datasets[0].data = Object.values(alertTypeData);
             alertChart.update();
 
-            const coords = countryCoords[data.src_country];
-            if (coords && data.src_country !== "Internal/Private") {
-                if (!markers[data.src_country]) {
-                    markers[data.src_country] = L.marker(coords).addTo(map);
-                }
-                markers[data.src_country].bindPopup(`<b>${data.src_country}</b><br>Last Attack: ${data.src_ip}`).openPopup();
+            // Update Map Markers
+            const country = data.src_country;
+            const coords = countryCoords[country];
+            if (coords && country !== "Internal/Private") {
+                if (!markers[country]) markers[country] = L.marker(coords).addTo(map);
+                markers[country].bindPopup(`<b>${country}</b><br>Last Attack: ${data.src_ip}`);
             }
+
+            // Re-apply filters to newly added row
+            applyFilters();
         });
+
+        function applyFilters() {
+            const ipFilter = document.getElementById('filterIP').value.toLowerCase();
+            const typeFilter = document.getElementById('filterType').value.toLowerCase();
+            const geoFilter = document.getElementById('filterGeo').value.toLowerCase();
+            const sevFilter = document.getElementById('filterSeverity').value;
+
+            const rows = document.querySelectorAll('#alert-body tr');
+
+            rows.forEach(row => {
+                const ip = (row.getAttribute('data-ip') || "").toLowerCase();
+                const type = (row.getAttribute('data-type') || "").toLowerCase();
+                const geo = (row.getAttribute('data-geo') || "").toLowerCase();
+                const sev = row.getAttribute('data-severity') || "";
+
+                const matchesIP = ip.includes(ipFilter);
+                const matchesType = type.includes(typeFilter);
+                const matchesGeo = geo.includes(geoFilter);
+                const matchesSev = sevFilter === "" || sev === sevFilter;
+
+                row.style.display = (matchesIP && matchesType && matchesGeo && matchesSev) ? "" : "none";
+            });
+        }
     </script>
 </body>
 </html>
